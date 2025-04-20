@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         AI Studio 多功能脚本合集（更新版）
+// @name         AI Studio 多功能脚本合集（更新版-可拖动按钮）
 // @namespace    http://tampermonkey.net/
-// @version      1.4.3
+// @version      1.5.0 // <-- Increment version
 // @description  此脚本整合了三个主要功能：
 //               1. 项目创建流程：在 console.cloud.google.com 页面自动创建目标数（默认5个）的项目；
 //               2. API KEY 自动生成流程：在项目创建完成后，自动跳转到 aistudio.google.com/apikey 页面生成 API KEY；
@@ -9,6 +9,7 @@
 //               脚本会自动监测当前页面所属域，如果用户点击创建功能而不在目标页面，则自动跳转到 console.cloud.google.com；
 //               同理，点击提取功能时如果不在 aistudio.google.com 页面，则自动跳转到目标页面。
 //               此外，脚本利用 MutationObserver、定时器、路由变化监听和 window 的 load/DOMContentLoaded 事件，确保悬浮按钮能自动插入，无需手动刷新。
+//               【新增】按钮容器现在可以拖动，并默认显示在屏幕右侧中间。
 //
 // 【重要说明】
 // 1. 本脚本仅为内部自动化操作脚本，部分错误提示（例如来自Google Tag Manager的）是由第三方脚本引起，与本脚本功能无关。
@@ -29,7 +30,7 @@
 // 【运行范围】
 // 该脚本在所有 console.cloud.google.com 与 aistudio.google.com 的子域下均生效（@match 改为 *://*.console.cloud.google.com/* 与 *://*.aistudio.google.com/*）。
 //
-// @author       YourName
+// @author       YourName (Modified)
 // @match        *://*.console.cloud.google.com/*
 // @match        *://*.aistudio.google.com/*
 // @grant        GM_setValue
@@ -40,6 +41,7 @@
 (function () {
     'use strict';
 
+    // ... (保持 公共工具函数, 项目创建流程, API KEY 自动生成流程, 提取现有 API KEY 流程, 整体控制入口 不变) ...
     /*******************************
      * 公共工具函数
      *******************************/
@@ -756,11 +758,6 @@
 
     /*******************************
      * 4. 整体控制入口
-     *
-     * 当点击“创建项目并获取API KEY”按钮时：
-     *   - 如果当前处于 console.cloud.google.com，则先执行项目创建，
-     *     创建完成后使用 GM_setValue 设置标记，并自动跳转到 https://aistudio.google.com/apikey；
-     *   - 如果当前已在 aistudio.google.com 下，则直接执行 API KEY 自动生成流程。
      *******************************/
     async function createProjectsAndGetApiKeys() {
         if (location.host.includes("console.cloud.google.com")) {
@@ -768,113 +765,203 @@
             GM_setValue("projectsCreated", true);
             window.location.href = "https://aistudio.google.com/apikey";
         } else {
-            await runApiKeyCreation();
+            // 如果当前不在 console 页面，先跳转
+            GM_setValue("projectsCreated", true); // 设置标记以便跳转后执行
+            window.location.href = "https://console.cloud.google.com";
         }
     }
 
     /*******************************
-     * 如果当前在 aistudio 页面且存在“projectsCreated”标记，则自动执行 API KEY 生成流程
+     * 自动执行 API KEY 生成流程的逻辑
      *******************************/
     if (location.host.includes("aistudio.google.com") && GM_getValue("projectsCreated", false)) {
-        GM_setValue("projectsCreated", false);
-        delay(1000).then(() => runApiKeyCreation());
+        GM_setValue("projectsCreated", false); // 清除标记
+        console.log("检测到项目创建标记，将在短暂延迟后开始 API Key 生成流程...");
+        delay(2000).then(() => runApiKeyCreation()); // 增加一点延迟确保页面加载
     }
 
     /*******************************
-     * 悬浮按钮自动插入 —— 利用 MutationObserver、定时器及路由变化监听
+     * 悬浮按钮自动插入 + 拖动逻辑
      *******************************/
+
+    // --- 拖动逻辑开始 ---
+    let dragOffsetX = 0, dragOffsetY = 0, currentDragElement = null;
+
+    function dragMouseDown(e) {
+        e = e || window.event;
+        e.preventDefault(); // 防止默认的文本选择等行为
+        currentDragElement = this; // 'this' refers to the element container
+
+        // 获取鼠标相对于元素左上角的位置
+        const rect = currentDragElement.getBoundingClientRect();
+        dragOffsetX = e.clientX - rect.left;
+        dragOffsetY = e.clientY - rect.top;
+
+        // --- 重要: 移除 right 和 transform 以便用 top/left 定位 ---
+        currentDragElement.style.right = 'auto';
+        currentDragElement.style.transform = 'none'; // 移除垂直居中变换
+
+        // 设置初始的 top 和 left (基于当前位置)
+        currentDragElement.style.left = `${rect.left}px`;
+        currentDragElement.style.top = `${rect.top}px`;
+
+        // 监听 document 上的 mousemove 和 mouseup 事件
+        document.onmouseup = closeDragElement;
+        document.onmousemove = elementDrag;
+        currentDragElement.style.cursor = 'grabbing'; // 更改鼠标样式
+    }
+
+    function elementDrag(e) {
+        e = e || window.event;
+        e.preventDefault();
+        if (!currentDragElement) return;
+
+        // 计算新的元素位置
+        let newTop = e.clientY - dragOffsetY;
+        let newLeft = e.clientX - dragOffsetX;
+
+        // 边界检查 (可选, 防止拖出屏幕)
+        const PADDING = 5; // 留一点边距
+        newTop = Math.max(PADDING, Math.min(newTop, window.innerHeight - currentDragElement.offsetHeight - PADDING));
+        newLeft = Math.max(PADDING, Math.min(newLeft, window.innerWidth - currentDragElement.offsetWidth - PADDING));
+
+
+        // 设置元素的新位置
+        currentDragElement.style.top = newTop + "px";
+        currentDragElement.style.left = newLeft + "px";
+    }
+
+    function closeDragElement() {
+        // 停止监听
+        document.onmouseup = null;
+        document.onmousemove = null;
+        if(currentDragElement) {
+            currentDragElement.style.cursor = 'grab'; // 恢复鼠标样式
+        }
+        currentDragElement = null;
+    }
+    // --- 拖动逻辑结束 ---
+
+
     function initFloatingButtons() {
         if (document.getElementById('ai-floating-buttons')) return;
         const container = document.createElement('div');
         container.id = 'ai-floating-buttons';
         container.style.position = 'fixed';
-        container.style.top = '10px';
-        container.style.right = '10px';
+        // --- 修改默认位置 ---
+        container.style.top = '50%';         // 垂直居中
+        container.style.right = '10px';       // 靠右
+        container.style.transform = 'translateY(-50%)'; // 精确垂直居中
+        // --- 其他样式 ---
         container.style.zIndex = '9999';
         container.style.display = 'flex';
         container.style.flexDirection = 'column';
         container.style.gap = '5px';
         container.style.background = 'rgba(255,255,255,0.9)';
-        container.style.padding = '5px';
+        container.style.padding = '10px'; // 增加一点内边距，方便拖动
         container.style.borderRadius = '4px';
         container.style.boxShadow = '0 2px 4px rgba(0,0,0,0.2)';
+        container.style.cursor = 'grab'; // 添加抓取手势
+
+        // --- 绑定拖动事件 ---
+        container.onmousedown = dragMouseDown;
+
 
         const btnCreateAndGet = document.createElement('button');
         btnCreateAndGet.textContent = '创建项目并获取API KEY';
         btnCreateAndGet.style.padding = '5px 10px';
         btnCreateAndGet.style.fontSize = '14px';
-        btnCreateAndGet.style.cursor = 'pointer';
+        btnCreateAndGet.style.cursor = 'pointer'; // 按钮本身保持 pointer
 
         const btnExtract = document.createElement('button');
         btnExtract.textContent = '提取API KEY';
         btnExtract.style.padding = '5px 10px';
         btnExtract.style.fontSize = '14px';
-        btnExtract.style.cursor = 'pointer';
+        btnExtract.style.cursor = 'pointer'; // 按钮本身保持 pointer
 
         container.appendChild(btnCreateAndGet);
         container.appendChild(btnExtract);
         document.body.appendChild(container);
 
-        btnCreateAndGet.addEventListener('click', async () => {
-            // 自动跳转至 console 页面（无需提示）
-            if (!location.host.includes("console.cloud.google.com")) {
+        btnCreateAndGet.addEventListener('click', async (event) => {
+            event.stopPropagation(); // 防止点击按钮触发拖动
+            // 自动跳转逻辑稍微修改
+            if (!location.host.includes("console.cloud.google.com") && !location.host.includes("aistudio.google.com")) {
+                 // 如果在未知页面，先跳到 console
+                GM_setValue("projectsCreated", true); // 设置标记
                 window.location.href = "https://console.cloud.google.com";
                 return;
+            } else if (location.host.includes("aistudio.google.com")) {
+                 // 如果在 aistudio，也应该先去 console 创建
+                GM_setValue("projectsCreated", true); // 设置标记
+                window.location.href = "https://console.cloud.google.com";
+                 return;
             }
+            // 只有在 console 页面才直接执行创建
             btnCreateAndGet.disabled = true;
             btnCreateAndGet.textContent = '运行中...';
             try {
-                await createProjectsAndGetApiKeys();
-                btnCreateAndGet.textContent = '创建项目并获取APIKEY (完成)';
+                await createProjectsAndGetApiKeys(); // 这个函数内部处理跳转
+                btnCreateAndGet.textContent = '创建项目并获取API KEY (跳转/完成)'; // 修改提示
             } catch (e) {
                 console.error('运行错误:', e);
                 btnCreateAndGet.textContent = '运行错误，检查控制台';
+                btnCreateAndGet.disabled = false; // 发生错误时允许重试
             }
-            setTimeout(() => {
-                btnCreateAndGet.disabled = false;
-                btnCreateAndGet.textContent = '创建项目并获取APIKEY';
-            }, 3000);
+            // 不需要延时恢复按钮，因为页面会跳转或流程会结束
         });
 
-        btnExtract.addEventListener('click', async () => {
-            // 自动跳转至 aistudio 页面（无需提示）
+        btnExtract.addEventListener('click', async (event) => {
+            event.stopPropagation(); // 防止点击按钮触发拖动
+            // 自动跳转至 aistudio 页面
             if (!location.host.includes("aistudio.google.com")) {
                 window.location.href = "https://aistudio.google.com/apikey";
-                return;
+                return; // 跳转后让脚本在新页面执行
             }
+            // 只有在 aistudio 页面才执行提取
             btnExtract.disabled = true;
             btnExtract.textContent = '运行中...';
             try {
                 await runExtractKeys();
-                btnExtract.textContent = '提取APIKEY (完成)';
+                btnExtract.textContent = '提取API KEY (完成)';
             } catch (e) {
                 console.error('运行错误:', e);
                 btnExtract.textContent = '运行错误，检查控制台';
             }
+            // 提取完成后可以恢复按钮
             setTimeout(() => {
                 btnExtract.disabled = false;
-                btnExtract.textContent = '提取APIKEY';
+                btnExtract.textContent = '提取API KEY';
             }, 3000);
         });
     }
 
+    // --- 保持不变的初始化和监听逻辑 ---
     // MutationObserver 监控 DOM 变化
     const observer = new MutationObserver((mutations, obs) => {
-        if (document.body) {
+        if (document.body && !document.getElementById('ai-floating-buttons')) { // 添加检查，避免重复创建
             initFloatingButtons();
         }
     });
     observer.observe(document, { childList: true, subtree: true });
-    // 定时检查（每 1000 毫秒执行一次）
-    setInterval(() => {
-        if (!document.getElementById('ai-floating-buttons')) {
+
+    // 定时检查（辅助手段）
+    const buttonCheckInterval = setInterval(() => {
+        // 确保 body 存在后再检查
+        if (document.body && !document.getElementById('ai-floating-buttons')) {
             initFloatingButtons();
         }
-    }, 1000);
+        // 如果按钮已存在，可以考虑停止定时器（可选，但更高效）
+        // if (document.getElementById('ai-floating-buttons')) {
+        //     clearInterval(buttonCheckInterval);
+        // }
+    }, 1500); // 稍微降低频率
+
     // 监听 window 的 DOMContentLoaded 与 load 事件
     window.addEventListener('DOMContentLoaded', initFloatingButtons);
     window.addEventListener('load', initFloatingButtons);
-    // 路由变化监听（针对 SPA）——重写 history 方法，发出自定义事件 locationchange
+
+    // 路由变化监听（针对 SPA）
     (function() {
         const _wr = function(type) {
             const orig = history[type];
@@ -882,7 +969,7 @@
                 const rv = orig.apply(this, arguments);
                 const e = new Event(type);
                 window.dispatchEvent(e);
-                window.dispatchEvent(new Event('locationchange'));
+                window.dispatchEvent(new Event('locationchange')); // 发出统一的事件
                 return rv;
             };
         };
@@ -892,9 +979,21 @@
             window.dispatchEvent(new Event('locationchange'));
         });
     })();
+
     window.addEventListener('locationchange', () => {
-        initFloatingButtons();
+        // 路由变化后，延迟一点时间再尝试初始化按钮，给页面元素加载时间
+        setTimeout(() => {
+            if (document.body && !document.getElementById('ai-floating-buttons')) {
+                initFloatingButtons();
+            }
+        }, 500); // 延迟 500ms
     });
-    delay(3000).then(initFloatingButtons);
+
+    // 初始延迟执行（兜底）
+    delay(3000).then(() => {
+        if (document.body && !document.getElementById('ai-floating-buttons')) {
+            initFloatingButtons();
+        }
+    });
 
 })();
