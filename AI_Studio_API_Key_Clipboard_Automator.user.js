@@ -137,6 +137,24 @@
               keyDisplaySel   = "div.apikey-text";
         const summary = {}, allKeys = [];
 
+        // --- New code to get existing keys ---
+        const projectsWithExistingKeys = new Set();
+        try {
+            const rows = document.querySelectorAll("project-table div[role='rowgroup'].table-body > div[role='row'].table-row");
+            for (const row of rows) {
+                const nameEl = row.querySelector("div[role='cell'].project-cell > div:first-child");
+                const linkEl = row.querySelector("div[role='cell'].project-cell + div[role='cell'].key-cell a.apikey-link");
+                if (nameEl && linkEl) { // If a project row has a key link, assume it has a key
+                    projectsWithExistingKeys.add(nameEl.textContent.trim());
+                }
+            }
+            console.log(`Found ${projectsWithExistingKeys.size} projects with existing keys.`);
+        } catch (e) {
+            console.warn("Could not determine projects with existing keys.", e);
+            // If unable to get existing keys, proceed with creation for all projects found in the dropdown later
+        }
+        // --- End new code ---
+
         async function waitEl(sel,t=20000,root=document,chk=true) {
             const start = Date.now();
             while (Date.now()-start < t) {
@@ -191,6 +209,13 @@
             const projName = projectInfo[pi].name;
             summary[projName] = [];
             // ---- 移除了内层 for (let ki = 0; ki < 1; ki++) 循环 ----
+            // --- New check for existing key ---
+            if (projectsWithExistingKeys.has(projName)) { // Check if project name is in the set of projects with existing keys
+                console.log(`项目 "${projName}" 已有 API Key，跳过生成。`);
+                continue; // Skip to the next project in the loop
+            }
+            // --- End new check ---
+
             try {
                 (await waitEl(mainBtnSel)).click();
                 await delay(500);
@@ -249,7 +274,9 @@
                 ta.select();
                 alert('剪贴板写入被拦截，已在页面弹出所有 KEY，请手动复制');
             }
+            return allKeys.length; // 返回成功获取的 API Key 数量
         }
+        return allKeys.length; // 返回成功获取的 API Key 数量
     }
 
     /********** 3. 提取现有 API KEY **********/
@@ -424,19 +451,55 @@
         document.addEventListener('mouseup', handleMouseUp);
 
         btn1.onclick = async ()=>{
-            if (!/console\.cloud\.google\.com/.test(location.host)) {
-                // 从当前 URL 提取用户顺序号
-                const match = location.href.match(/\/u\/(\d+)\/apikey/);
-                const authuser = match ? match[1] : '0'; // 默认使用 0
-                GM_setValue('aiStudioAuthuser', authuser); // Save authuser
-                const targetUrl = `https://console.cloud.google.com${authuser !== '0' ? `?authuser=${authuser}` : ''}`;
-                location.href = targetUrl;
-                return;
+            btn1.disabled=true; btn1.textContent='运行中...'; // 立即禁用按钮并更新文本
+
+            if (/aistudio\.google\.com/.test(location.host)) {
+                // 在 AI Studio 页面
+                try {
+                    // 优先尝试获取现有项目的 API Key
+                    const createdKeyCount = await runApiKeyCreation();
+                    console.log(`尝试创建/提取 API Key，找到 ${createdKeyCount} 个。`);
+
+                    // 设定一个阈值，例如如果少于 8 个 Key，则认为需要创建更多项目
+                    const MIN_KEYS_NEEDED = 8;
+
+                    if (createdKeyCount < MIN_KEYS_NEEDED) {
+                        console.log(`找到的 Key 少于 ${MIN_KEYS_NEEDED} 个。正在跳转以创建更多项目。`);
+                        // 需要创建更多项目，跳转到 Google Cloud Console
+                        const match = location.href.match(/\/u\/(\d+)\/apikey/);
+                        const authuser = match ? match[1] : '0'; // 默认使用 0
+                        GM_setValue('aiStudioAuthuser', authuser); // 保存用户顺序号
+                        const targetUrl = `https://console.cloud.google.com${authuser !== '0' ? `?authuser=${authuser}` : ''}`;
+                        location.href = targetUrl;
+                        // 脚本将在跳转后的页面继续执行
+                    } else {
+                        console.log(`找到 ${createdKeyCount} 个 Key。无需创建更多项目。`);
+                        btn1.textContent='完成'; // 任务在此页面完成
+                        setTimeout(()=>{btn1.disabled=false;btn1.textContent='创建项目并获取API KEY';},3000); // 重新启用按钮
+                    }
+                } catch(e) {
+                    console.error("在 AI Studio 页面创建/提取 API Key 时发生错误:", e);
+                    btn1.textContent='错误';
+                    setTimeout(()=>{btn1.disabled=false;btn1.textContent='创建项目并获取API KEY';},3000); // 错误时重新启用按钮
+                }
+
+            } else if (/console\.cloud\.google\.com/.test(location.host)) {
+                // 在 Google Cloud Console 页面 (从 AI Studio 跳转过来后执行)
+                try {
+                    await createAndFetch(); // 执行项目创建并跳转回 AI Studio
+                    // 脚本将在跳转后的页面继续执行
+                } catch(e) {
+                    console.error("在 Google Cloud Console 页面创建项目时发生错误:", e);
+                    btn1.textContent='错误';
+                    setTimeout(()=>{btn1.disabled=false;btn1.textContent='创建项目并获取API KEY';},3000); // 错误时重新启用按钮
+                }
+            } else {
+                 // 不在 AI Studio 或 Google Cloud Console 页面，先跳转到 AI Studio
+                const match = location.href.match(/\/u\/(\d+)\//); // 尝试从任意 google.com 域名提取用户顺序号
+                const authuserSegment = match ? `/u/${match[1]}` : '';
+                location.href = `https://aistudio.google.com${authuserSegment}/apikey`;
+                // 脚本将在跳转后的页面继续执行
             }
-            btn1.disabled=true; btn1.textContent='运行中...';
-            try { await createAndFetch(); btn1.textContent='完成'; }
-            catch(e){ console.error(e); btn1.textContent='错误'; }
-            setTimeout(()=>{btn1.disabled=false;btn1.textContent='创建项目并获取API KEY';},3000);
         };
         btn2.onclick = async ()=>{
             if (!/aistudio\.google\.com/.test(location.host)) { location.href="https://aistudio.google.com/apikey"; return; }
