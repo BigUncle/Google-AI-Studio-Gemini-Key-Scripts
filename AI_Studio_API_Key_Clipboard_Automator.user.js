@@ -299,7 +299,32 @@
         if (document.getElementById('ai-floating-buttons')) return;
         const c = document.createElement('div');
         c.id = 'ai-floating-buttons';
-        Object.assign(c.style, {position:'fixed',top:'10px',right:'10px',zIndex:9999,display:'flex',flexDirection:'column',gap:'5px',background:'rgba(255,255,255,0.9)',padding:'5px',borderRadius:'4px',boxShadow:'0 2px 4px rgba(0,0,0,0.2)'});
+        
+        // 初始位置设为右侧中间
+        const initialRight = '10px';
+        const initialTop = `${Math.max(10, (window.innerHeight - 100) / 2)}px`;
+        
+        Object.assign(c.style, {
+            position: 'fixed',
+            top: initialTop,
+            right: initialRight,
+            zIndex: 9999,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '5px',
+            background: 'rgba(255,255,255,0.9)',
+            padding: '5px',
+            borderRadius: '4px',
+            boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+            cursor: 'move', // 指示可拖动
+            userSelect: 'none' // 防止文本选择
+        });
+        
+        // 添加拖动条样式，作为提示
+        const dragHandle = document.createElement('div');
+        dragHandle.style.cssText = 'height:6px;width:100%;background:#e0e0e0;border-radius:3px;margin-bottom:5px;';
+        c.appendChild(dragHandle);
+        
         const btn1 = document.createElement('button'), btn2 = document.createElement('button');
         btn1.textContent='创建项目并获取API KEY'; btn2.textContent='提取API KEY';
         [btn1,btn2].forEach(b=>{
@@ -307,6 +332,53 @@
             c.appendChild(b);
         });
         document.body.appendChild(c);
+
+        // 添加拖拽功能
+        let isDragging = false;
+        let offsetX, offsetY;
+
+        function handleMouseDown(e) {
+            isDragging = true;
+            const rect = c.getBoundingClientRect();
+            // 计算鼠标点击位置与面板左上角的偏移
+            offsetX = e.clientX - rect.left;
+            offsetY = e.clientY - rect.top;
+            
+            // 添加临时样式
+            c.style.opacity = '0.8';
+        }
+
+        function handleMouseMove(e) {
+            if (!isDragging) return;
+            
+            // 计算新位置
+            let newLeft = e.clientX - offsetX;
+            let newTop = e.clientY - offsetY;
+            
+            // 确保不超出视口
+            const maxLeft = window.innerWidth - c.offsetWidth;
+            const maxTop = window.innerHeight - c.offsetHeight;
+            
+            newLeft = Math.max(0, Math.min(newLeft, maxLeft));
+            newTop = Math.max(0, Math.min(newTop, maxTop));
+            
+            // 使用left而不是right，因为拖动时使用left更直观
+            c.style.left = `${newLeft}px`;
+            c.style.top = `${newTop}px`;
+            c.style.right = 'auto';
+        }
+
+        function handleMouseUp() {
+            if (isDragging) {
+                isDragging = false;
+                c.style.opacity = '1';
+            }
+        }
+
+        // 绑定拖拽事件
+        c.addEventListener('mousedown', handleMouseDown);
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('mouseup', handleMouseUp);
 
         btn1.onclick = async ()=>{
             if (!/console\.cloud\.google\.com/.test(location.host)) { location.href="https://console.cloud.google.com"; return; }
@@ -322,6 +394,25 @@
             catch(e){ console.error(e); btn2.textContent='错误'; }
             setTimeout(()=>{btn2.disabled=false;btn2.textContent='提取API KEY';},3000);
         };
+        
+        // 防止按钮点击触发拖动
+        btn1.addEventListener('mousedown', e => e.stopPropagation());
+        btn2.addEventListener('mousedown', e => e.stopPropagation());
+        
+        // 防止可能的触摸设备上的拖动问题
+        c.addEventListener('touchstart', e => {
+            const touch = e.touches[0];
+            handleMouseDown({ clientX: touch.clientX, clientY: touch.clientY });
+        }, { passive: false });
+        
+        document.addEventListener('touchmove', e => {
+            if (!isDragging) return;
+            const touch = e.touches[0];
+            handleMouseMove({ clientX: touch.clientX, clientY: touch.clientY });
+            e.preventDefault(); // 防止页面滚动
+        }, { passive: false });
+        
+        document.addEventListener('touchend', handleMouseUp);
     }
 
     new MutationObserver(initButtons).observe(document,{childList:true,subtree:true});
