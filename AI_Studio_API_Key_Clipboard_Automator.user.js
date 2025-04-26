@@ -94,12 +94,34 @@
             }
         }
 
-        for (let i = 1; i <= TARGET; i++) {
+        let existingProjectCount = 0;
+        try {
+            // 尝试查找项目列表并计数 - 此选择器是猜测，可能需要根据实际页面结构调整
+            const projectTableBody = await waitForElement('div[role="main"] table tbody', 5000);
+            const projectRows = projectTableBody.querySelectorAll('tr');
+            existingProjectCount = projectRows.length;
+            console.log(`Detected ${existingProjectCount} existing projects.`);
+        } catch (e) {
+            console.warn("Could not determine existing project count, proceeding with default target (5).", e);
+            // 如果无法计数，为了安全起见，继续使用原有的 TARGET 值（5）
+            existingProjectCount = 0; // 视为 0，允许创建最多 8 个
+        }
+
+        const projectsToCreate = Math.max(0, 8 - existingProjectCount);
+        console.log(`Attempting to create ${projectsToCreate} new projects.`);
+
+        if (projectsToCreate <= 0) {
+            console.log("Existing project count is 8 or more. No new projects will be created.");
+            GM_setValue(RK, '0'); // 重置刷新计数
+            return; // 退出函数
+        }
+
+        for (let i = 1; i <= projectsToCreate; i++) {
             const res = await createOnce();
             if (res.limitReached) break;
             if (res.refreshed) return;
             success++;
-            if (i < TARGET) await delay(BETWEEN);
+            if (i < projectsToCreate) await delay(BETWEEN);
         }
         GM_setValue(RK, '0');
     }
@@ -305,7 +327,8 @@
         if (/console\.cloud\.google\.com/.test(location.host)) {
             await runProjectCreation();
             GM_setValue("projectsCreated", true);
-            location.href = "https://aistudio.google.com/apikey";
+            const savedAuthuser = GM_getValue('aiStudioAuthuser', '0');
+            location.href = `https://aistudio.google.com${savedAuthuser !== '0' ? `/u/${savedAuthuser}` : ''}/apikey`;
         } else {
             await runApiKeyCreation();
         }
@@ -401,7 +424,15 @@
         document.addEventListener('mouseup', handleMouseUp);
 
         btn1.onclick = async ()=>{
-            if (!/console\.cloud\.google\.com/.test(location.host)) { location.href="https://console.cloud.google.com"; return; }
+            if (!/console\.cloud\.google\.com/.test(location.host)) {
+                // 从当前 URL 提取用户顺序号
+                const match = location.href.match(/\/u\/(\d+)\/apikey/);
+                const authuser = match ? match[1] : '0'; // 默认使用 0
+                GM_setValue('aiStudioAuthuser', authuser); // Save authuser
+                const targetUrl = `https://console.cloud.google.com${authuser !== '0' ? `?authuser=${authuser}` : ''}`;
+                location.href = targetUrl;
+                return;
+            }
             btn1.disabled=true; btn1.textContent='运行中...';
             try { await createAndFetch(); btn1.textContent='完成'; }
             catch(e){ console.error(e); btn1.textContent='错误'; }
