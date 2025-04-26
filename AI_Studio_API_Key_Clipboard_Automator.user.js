@@ -164,33 +164,52 @@
         }
         if (!projectCount) return;
 
-        // 每个项目生成 key
+        // 每个项目生成 key (确保每个项目只尝试生成一次)
         for (let pi = 0; pi < projectCount; pi++) {
             const projName = projectInfo[pi].name;
             summary[projName] = [];
-            for (let ki = 0; ki < 1; ki++) {
-                try {
-                    (await waitEl(mainBtnSel)).click();
-                    await delay(500);
-                    const dlg1 = await waitEl(dialogSel);
-                    (await waitEl(projInput,15000,dlg1)).click();
-                    await delay(2000);
-                    const opts1 = await waitForElements(optionSel, projectCount, 20000, document);
+            // ---- 移除了内层 for (let ki = 0; ki < 1; ki++) 循环 ----
+            try {
+                (await waitEl(mainBtnSel)).click();
+                await delay(500);
+                const dlg1 = await waitEl(dialogSel);
+                (await waitEl(projInput,15000,dlg1)).click();
+                await delay(2000);
+                const opts1 = await waitForElements(optionSel, projectCount, 20000, document);
+
+                // 检查索引是否有效，防止列表在操作过程中变化
+                if (pi < opts1.length) {
                     opts1[pi].click();
+                    // 触发 change 事件可能不是必需的，但保留以防万一
                     opts1[pi].dispatchEvent(new Event('change',{bubbles:true}));
                     await delay(1500);
                     (await waitEl(dialogCreateSel,10000,dlg1,false)).click();
                     const keyEl = await waitForElement(keyDisplaySel,25000,document,false);
                     let key = keyEl.textContent?.trim()||keyEl.value||'';
-                    summary[projName].push(key);
-                    allKeys.push(key);
+
+                    // 仅当成功获取到 key 时才记录
+                    if (key) {
+                        summary[projName].push(key);
+                        allKeys.push(`${projName}: ${key}`);
+                        console.log(`${projName}: ${key}`);
+                    } else {
+                         console.warn(`项目 "${projName}" 生成的 key 为空或获取失败。`);
+                    }
                     await closeDialog();
+                    // 等待一段时间再处理下一个项目，避免过快操作
                     await delay(2500);
-                } catch (e) {
-                    console.error(`项目"${projName}"第${ki+1}次生成失败`, e);
+                } else {
+                    console.error(`项目索引 ${pi} 超出选项列表范围 (${opts1.length})，跳过此项目。`);
+                    // 如果项目索引无效，也尝试关闭可能打开的对话框
                     await closeDialog();
                 }
+
+            } catch (e) {
+                console.error(`项目 "${projName}" 生成 key 时发生错误`, e);
+                // 确保出错时也尝试关闭对话框
+                await closeDialog();
             }
+            // 在处理下一个项目之前增加延时，无论成功与否
             await delay(4000);
         }
 
@@ -255,8 +274,9 @@
                     const full = await waitLocal(fullKeySel,25000);
                     let key = full.textContent?.trim()||full.value||'';
                     if (key && !allKeys.includes(key)) {
-                        allKeys.push(key);
+                        allKeys.push(`${pname}: ${key}`);
                         byProj[pname].push(key);
+                        console.log(`${pname}: ${key}`);
                     }
                     await closeReveal(); await delay(1500);
                 } catch (e) {
